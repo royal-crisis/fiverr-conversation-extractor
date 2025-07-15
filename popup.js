@@ -405,6 +405,77 @@ function initializeSettings() {
     return markdown;
   }
 
+  
+
+  // Download all conversations
+  document.getElementById('downloadAllBtn').addEventListener('click', async () => {
+    chrome.storage.local.get(['allContacts'], async function (result) {
+      const contacts = result.allContacts || [];
+      if (contacts.length === 0) {
+        updateStatus('No contacts to download.', true);
+        return;
+      }
+
+      updateStatus(`📦 Starting download of ${contacts.length} conversations...`, false, true);
+      const zip = new JSZip();
+      let currentIndex = 1;
+
+      for (const contact of contacts) {
+        const uname = contact.username;
+        if (!uname) continue;
+
+        updateStatus(`📄 Fetching ${currentIndex}/${contacts.length}: ${uname}`, false, true);
+
+        await new Promise(resolve => {
+          chrome.storage.local.set({ currentUsername: uname }, () => {
+            chrome.runtime.sendMessage({ type: 'EXTRACT_CONVERSATION' });
+
+            const listener = (request) => {
+              if (request.type === 'CONVERSATION_EXTRACTED' && request.data && request.data.markdownContent) {
+                const content = request.data.markdownContent;
+                zip.file(`fiverr_conversation_${uname}.md`, content);
+                addLogEntry(`✅ Added ${uname}`);
+                chrome.runtime.onMessage.removeListener(listener);
+                setTimeout(resolve, 500);
+              } else if (request.type === 'CONVERSATION_EXTRACTED' && request.data) {
+                chrome.storage.local.get(['markdownContent'], (result) => {
+                  const content = result.markdownContent || '';
+                  zip.file(`fiverr_conversation_${uname}.md`, content);
+                  addLogEntry(`✅ Added ${uname}`);
+                  chrome.runtime.onMessage.removeListener(listener);
+                  setTimeout(resolve, 500);
+                });
+              } else if (request.type === 'EXTRACTION_ERROR') {
+                addLogEntry(`❌ Failed to extract ${uname}: ${request.error}`, true);
+                chrome.runtime.onMessage.removeListener(listener);
+                setTimeout(resolve, 500);
+              }
+            };
+
+            chrome.runtime.onMessage.addListener(listener);
+          });
+        });
+
+        currentIndex++;
+      }
+
+      updateStatus('📦 Zipping conversations...', false, true);
+
+      // Generate and download ZIP
+      zip.generateAsync({ type: 'blob' }).then(content => {
+        const zipFilename = `fiverr_conversations_${new Date().toISOString().split('T')[0]}.zip`;
+        const zipUrl = URL.createObjectURL(content);
+        chrome.downloads.download({
+          url: zipUrl,
+          filename: zipFilename,
+          saveAs: false
+        });
+        updateStatus('✅ All conversations saved to ZIP.', false);
+      });
+    });
+  });
+
+
   // Save settings
   saveBtn.addEventListener('click', async () => {
     const newFormat = dateFormatSelect.value;
